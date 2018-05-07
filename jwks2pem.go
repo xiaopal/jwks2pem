@@ -10,8 +10,26 @@ import (
 	"github.com/docker/libtrust"
 )
 
-type jwkSet struct {
-	Keys []map[string]json.RawMessage `json:"keys"`
+type jwkt struct {
+	Kty  string            `json:"kty"`
+	Keys []json.RawMessage `json:"keys"`
+}
+
+func exportJwkToPemBlock(data []byte) (*pem.Block, error) {
+	jwk := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &jwk); err != nil {
+		return nil, fmt.Errorf("unable to decode jwk: %s", err)
+	}
+	delete(jwk, "kid")
+	jwkData, err := json.Marshal(jwk)
+	if err != nil {
+		return nil, fmt.Errorf("unable to encode json: %s", err)
+	}
+	key, err := libtrust.UnmarshalPublicKeyJWK(jwkData)
+	if err != nil {
+		return nil, fmt.Errorf("unable to decode jwk: %s", err)
+	}
+	return key.PEMBlock()
 }
 
 func exportJwkSetToPemBlocks(data []byte) ([]*pem.Block, error) {
@@ -20,23 +38,19 @@ func exportJwkSetToPemBlocks(data []byte) ([]*pem.Block, error) {
 		return []*pem.Block{}, nil
 	}
 
-	keySet := jwkSet{}
-	if err := json.Unmarshal(data, &keySet); err != nil {
-		return nil, fmt.Errorf("unable to decode jwks: %s", err)
+	kt := jwkt{}
+	if err := json.Unmarshal(data, &kt); err != nil {
+		return nil, fmt.Errorf("unable to decode jwks/jwk: %s", err)
 	}
 
-	blocks := make([]*pem.Block, 0, len(keySet.Keys))
-	for _, key := range keySet.Keys {
-		delete(key, "kid")
-		jwkData, err := json.Marshal(key)
-		if err != nil {
-			return nil, fmt.Errorf("unable to encode json: %s", err)
-		}
-		key, err := libtrust.UnmarshalPublicKeyJWK(jwkData)
-		if err != nil {
-			return nil, fmt.Errorf("unable to decode jwk: %s", err)
-		}
-		block, err := key.PEMBlock()
+	keySet := kt.Keys
+	if len(kt.Kty) > 0 {
+		keySet = []json.RawMessage{data}
+	}
+
+	blocks := make([]*pem.Block, 0, len(keySet))
+	for _, key := range keySet {
+		block, err := exportJwkToPemBlock(key)
 		if err != nil {
 			return nil, fmt.Errorf("unable to encode pem: %s", err)
 		}
